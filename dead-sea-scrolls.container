@@ -1,0 +1,20 @@
+[Unit]
+Description=Dead Sea Scrolls MCP server
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=dead-sea-scrolls
+Image=dead-sea-scrolls.build
+UserNS=keep-id:uid=1000,gid=1000
+PublishPort=32473:32473
+Volume=%h/.local/share/dead-sea-scrolls/bundle:/bundle:Z
+Volume=%h/.config/dead-sea-scrolls:/config:Z
+Environment=TZ=America/Phoenix
+
+[Service]
+Restart=always
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

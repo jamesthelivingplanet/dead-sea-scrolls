@@ -1,0 +1,115 @@
+[tasks.status]
+description = "Show service state, /mcp initialize answer, last sync result, resync flag and flagged concepts"
+run = """
+systemctl --user is-active dead-sea-scrolls.service
+curl -s -m 10 http://127.0.0.1:32473/mcp \\
+  -H 'Content-Type: application/json' \\
+  -H 'Accept: application/json, text/event-stream' \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"mise-status","version":"1"}}}' \\
+  | python3 -I -c "
+import sys, json
+raw = sys.stdin.read()
+payload = None
+for line in raw.splitlines():
+    if line.startswith('data:'):
+        payload = line[5:].strip()
+        break
+if payload is None:
+    payload = raw.strip()
+try:
+    r = json.loads(payload)['result']
+    print('mcp', r['serverInfo'], 'protocolVersion', r['protocolVersion'])
+except Exception:
+    print('mcp: no valid initialize answer')
+"
+podman exec dead-sea-scrolls node dist/cli.js status || echo "cli status unavailable (container not running?)"
+echo "public URL: http://HOST:32473/mcp"
+"""
+
+[tasks.backup]
+description = "Tarball the bundle into ~/.local/share/dead-sea-scrolls/backups/, keep last 5"
+run = """
+set -e
+D=$HOME/.local/share/dead-sea-scrolls
+mkdir -p $D/backups
+tar -C $D -czf $D/backups/dead-sea-scrolls-$(date +%Y%m%d-%H%M%S).tar.gz bundle
+ls -1t $D/backups/*.tar.gz | tail -n +6 | xargs -r rm --
+ls -1t $D/backups
+"""
+
+[tasks.update]
+description = "mise run update 26.x.y-bookworm-slim : backup, bump node tag, rebuild, restart, status"
+usage = 'arg "<node-tag>" help="Node image tag, e.g. 26.14.0-bookworm-slim"'
+run = """
+set -e
+TAG="${usage_node_tag}"
+if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.-]+)?$'; then
+  echo "invalid node tag: $TAG" >&2
+  exit 1
+fi
+mise run backup
+PREV=$(grep '^ARG NODE_TAG=' Containerfile)
+OLD=$(podman images -q --no-trunc localhost/dead-sea-scrolls:1.0.0 2>/dev/null || true)
+sed -i "s|^ARG NODE_TAG=.*|ARG NODE_TAG=${TAG}|" Containerfile
+systemctl --user daemon-reload
+# Restarting the container unit alone would not re-run the oneshot build unit.
+if ! systemctl --user restart dead-sea-scrolls-build.service; then
+  echo "rebuild failed, restoring previous: $PREV" >&2
+  sed -i "s|^ARG NODE_TAG=.*|${PREV}|" Containerfile
+  systemctl --user daemon-reload
+  exit 1
+fi
+systemctl --user restart dead-sea-scrolls.service
+# The app-version tag is reused, so the previous image is left untagged: remove it.
+NEW=$(podman images -q --no-trunc localhost/dead-sea-scrolls:1.0.0)
+if [ -n "$OLD" ] && [ "$OLD" != "$NEW" ]; then podman rmi "$OLD" >/dev/null 2>&1 || true; fi
+# Build stages are labelled; prune only this service's untagged leftovers.
+podman image prune -f --filter label=io.dead-sea-scrolls.build=1 >/dev/null 2>&1 || true
+for i in $(seq 1 60); do curl -s -m 3 -o /dev/null http://127.0.0.1:32473/mcp && break; sleep 2; done
+mise run status
+"""
+
+[tasks.sync]
+description = "Run a sync now and print the JSON result"
+run = """
+set -o pipefail
+podman exec dead-sea-scrolls node dist/cli.js sync | tee /dev/stderr | python3 -I -c "
+import sys, json
+try:
+    o = json.load(sys.stdin)['outcome']
+except Exception:
+    sys.exit(1)
+sys.exit(1 if o in ('error', 'resync-needed') else 0)
+"
+"""
+
+[tasks.logs]
+description = "Last 200 journal lines; pass -f to follow (mise run logs -f)"
+run = """
+journalctl --user -u dead-sea-scrolls.service -n 200 --no-pager "$@"
+"""
+
+[tasks.import]
+description = "One-time: import ~/.local/share/dead-sea-scrolls/import/bundle.zip into the bundle dir (host side)"
+run = """
+set -e
+D=$HOME/.local/share/dead-sea-scrolls
+[ -f dist/import.js ] || { npm ci && npm run build; }
+node dist/import.js $D/import/bundle.zip $D/bundle
+"""
+
+[tasks.install]
+description = "One-time setup: data/config dirs, symlink Quadlets, daemon-reload, start the service"
+run = """
+set -e
+D=$HOME/.local/share/dead-sea-scrolls
+mkdir -p $HOME/.config/dead-sea-scrolls $D/bundle $D/backups
+chmod 700 $HOME/.config/dead-sea-scrolls
+mkdir -p $HOME/.config/containers/systemd
+for f in dead-sea-scrolls.build dead-sea-scrolls.container; do
+  ln -sfn "$PWD/$f" $HOME/.config/containers/systemd/$f
+done
+systemctl --user daemon-reload
+systemctl --user start dead-sea-scrolls.service
+systemctl --user is-active dead-sea-scrolls.service
+"""

@@ -1,0 +1,11 @@
+.git
+node_modules
+dist
+docs
+test
+backups
+*.md
+*.container
+*.build
+mise.toml
+.env*
