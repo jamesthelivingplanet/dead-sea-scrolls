@@ -3,8 +3,8 @@ Description=Build the dead-sea-scrolls image
 
 [Build]
 ImageTag=localhost/dead-sea-scrolls:1.0.0
-SetWorkingDirectory=%h/<repo>
-File=%h/<repo>/Containerfile
+SetWorkingDirectory=%h/.repositories/dead-sea-scrolls
+File=%h/.repositories/dead-sea-scrolls/Containerfile
 
 [Service]
 TimeoutStartSec=900
